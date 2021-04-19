@@ -9,91 +9,287 @@
 #include <memory.h>
 
 
+void cpu_exec_r(cpu_t *cpu, uint8_t op, uint8_t rs, uint8_t rt, uint8_t rd, uint8_t sh, uint8_t fun);
+
+cpu_t* cpu_new() {
+    cpu_t *cpu = calloc(1, sizeof(cpu_t));
+    memset(cpu->registers, 0, sizeof(cpu->registers));
+    cpu->mmu = mmu_new(2);
+    cpu->halt = false;
+    return cpu;
+}
+
+void cpu_del(cpu_t* cpu) {
+    mmu_del(&cpu->mmu);
+}
+
+void cpu_next(cpu_t* cpu) {
+    uint32_t instr = cpu_mem_get_uword(cpu, R(PC));
+    cpu_exec(cpu, instr);
+}
+
+
+void cpu_exec(cpu_t *cpu, uint32_t instr) {
+    uint8_t op = (instr >> 26) & 0x3F;
+    uint8_t rs = (instr >> 21) & 0x1F;
+    uint8_t rt = (instr >> 16) & 0x1F;
+    uint16_t imm = instr & 0xFFFF;
+
+    switch (op) {
+        case 0x00:
+        case 0x10: {
+            uint8_t rd = (instr >> 11) & 0x1F;
+            uint8_t sh = (instr >> 6) & 0x1F;
+            uint8_t fn = (instr >> 0) & 0x3F;
+            cpu_exec_r(cpu, op, rs, rt, rd, sh, fn);
+            break;
+        }
+        case 0x02: { // j
+            S(PC, (RU(PC) & 0xF0000000) | ((instr & 0x03FFFFFF) << 2));
+            break;
+        }
+        case 0x03: { // jal
+            S(RA, RU(PC));
+            S(PC, (RU(PC) & 0xF0000000) | ((instr & 0x03FFFFF) << 2));
+            break;
+        }
+        case 0x08: { // addi
+            S(rt, R(rs) + (int32_t) (int16_t) imm);
+            PCINC;
+            break;
+        }
+        case 0x09: { // addiu
+            S(rt, RU(rs) + (uint16_t) imm);
+            PCINC;
+            break;
+        }
+        case 0x0C: { // andi
+            // Cast to u16 then to u32 so it compiles as `movzx` instead of `movsx`
+            S(rt, R(rs) & ((uint32_t) (uint16_t) imm));
+            PCINC;
+            break;
+        }
+        case 0x0D: { // ori
+            S(rt, R(rs) | ((uint32_t) (uint16_t) imm));
+            PCINC;
+            break;
+        }
+        case 0x0E: { // xori
+            S(rt, R(rs) ^ ((uint32_t) (uint16_t) imm));
+            PCINC;
+            break;
+        }
+        case 0x01: { // bltz
+            if (R(rs) < 0) {
+                S(PC, RU(PC) + 4 + ((int32_t) imm << 2));
+            } else {
+                PCINC;
+            }
+            break;
+        }
+        case 0x04: { // beq
+            if (R(rs) == R(rt)) {
+                S(PC, RU(PC) + 4 + ((int32_t) imm << 2));
+            } else {
+                PCINC;
+            }
+            break;
+        }
+        case 0x05: { // bne
+            if (R(rs) != R(rt)) {
+                S(PC, RU(PC) + 4 + ((int32_t) imm << 2));
+            } else {
+                PCINC;
+            }
+            break;
+        }
+        case 0x06: { // blez
+            if (R(rs) <= 0) {
+                S(PC, RU(PC) + 4 + ((int32_t) imm << 2));
+            } else {
+                PCINC;
+            }
+            break;
+        }
+        case 0x07: { // bgtz
+            if (R(rs) > 0) {
+                S(PC, RU(PC) + 4 + ((int32_t) imm << 2));
+            } else {
+                PCINC;
+            }
+            break;
+        }
+        case 0x20: { // lb
+            S(rt, cpu_mem_get_byte(cpu, imm + R(rs)));
+            PCINC;
+            break;
+        }
+        case 0x24: { // lbu
+            S(rt, (uint32_t) cpu_mem_get_ubyte(cpu, imm + R(rs)));
+            PCINC;
+            break;
+        }
+        case 0x21: { // lh
+            S(rt, cpu_mem_get_hword(cpu, imm + R(rs)));
+            PCINC;
+            break;
+        }
+        case 0x25: { // lhu
+            S(rt, (uint32_t) cpu_mem_get_uhword(cpu, imm + R(rs)));
+            break;
+        }
+        case 0x23: { // lw
+            S(rt, cpu_mem_get_word(cpu, R(rs) + imm));
+            PCINC;
+            break;
+        }
+        case 0x0F: { // lui
+            S(rt, R(rs) << 16);
+            PCINC;
+            break;
+        }
+        case 0x28: { // sb
+            cpu_mem_set_byte(cpu, R(rs) + imm, R(rt));
+            PCINC;
+            break;
+        }
+        case 0x29: { // sh
+            cpu_mem_set_hword(cpu, R(rs) + imm, R(rt));
+            PCINC;
+            break;
+        }
+        case 0x2B: { // sw
+            cpu_mem_set_word(cpu, R(rs) + imm, R(rt));
+            PCINC;
+            break;
+        }
+        case 0x0A: { // slti
+            S(rt, R(rs) < imm ? 1 : 0);
+            PCINC;
+            break;
+        }
+        case 0x0B: { // sltiu
+            S(rt, RU(rs) < (uint16_t) imm ? 1 : 0);
+            PCINC;
+            break;
+        }
+        default:
+            printf("Invalid opcode: 0x%02x\n", op);
+            break;
+    }
+
+#undef IOPER
+#undef IOPER_U
+#undef BRANCH
+
+}
+
+
 void cpu_exec_r(cpu_t *cpu, uint8_t op, uint8_t rs, uint8_t rt, uint8_t rd, uint8_t sh, uint8_t fun) {
-
-#define OPER(a, b, c, o) \
-    cpu->registers[a] = R(b) o R(c)
-#define OPER_U(a, b, c, o) \
-    cpu->registers[a] = RU(b) o RU(c)
-
     if (op == 0x00) {
         switch (fun) {
-            case 0x00: // sll
-                S(rd, R(rt) << sh);
+            case 0x20: { // add
+                //TODO: Overflow
+                S(rd, R(rs) + R(rt));
+                PCINC;
                 break;
-            case 0x1A: // div
-                OPER(HI, rs, rt, %);
-                OPER(LO, rs, rt, /);
+            }
+            case 0x21: // addu
+                S(rd, RU(rs) + RU(rt));
+                PCINC;
                 break;
-            case 0x1B: // divu
-                OPER_U(HI, rs, rt, %);
-                OPER_U(LO, rs, rt, /);
+            case 0x22: // sub
+                // TODO: Underflow
+                S(rd, R(rs) - R(rt));
+                PCINC;
                 break;
-            case 0x02: // srl
-                S(rd, RU(rt) >> sh);
+            case 0x23: // subu
+                S(rd, RU(rs) - RU(rt));
+                PCINC;
                 break;
-            case 0x2A: // slt
-                OPER(rd, rs, rt, <);
-                break;
-            case 0x2B: // sltu
-                OPER_U(rd, rs, rt, <);
-                break;
-            case 0x03: // sra
-                S(rd, R(rt) >> sh);
-                break;
-            case 0x08: // jr
-                S(PC, R(rs));
-                break;
-            case 0x10: // mfhi
-                S(rd, R(HI));
-                break;
-            case 0x11: // mthi
-                S(HI, R(rs));
-                break;
-            case 0x12: // mflo
-                S(rd, R(LO));
-                break;
-            case 0x13: // mtlo
-                S(LO, R(rs));
-                break;
-            case 0x18: { // mult
+            case 0x18: { // mul
                 int64_t res = R(rs) * R(rt);
                 S(HI, (res >> 32) & 0xFF);
                 S(LO, res & 0xFF);
+                PCINC;
                 break;
             }
-            case 0x19: { // multu
+            case 0x19: { // mulu
                 uint64_t res = RU(rs) * RU(rt);
                 S(HI, (res >> 32) & 0xFF);
                 S(LO, res & 0xFF);
+                PCINC;
                 break;
             }
-            case 0x20: // add
-                OPER(rd, rs, rt, +);
+            case 0x1A: // div
+                S(LO, R(rs) / R(rt));
+                S(HI, R(rs) % R(rt));
+                PCINC;
                 break;
-            case 0x21: // addu
-                OPER_U(rd, rs, rt, +);
+            case 0x1B: // divu
+                S(LO, RU(rs) / RU(rt));
+                S(HI, RU(rs) % RU(rt));
+                PCINC;
                 break;
-            case 0x22: // sub
-                OPER(rd, rs, rt, -);
+            case 0x2A: {// slt
+                S(rd, R(rs) < R(rt) ? 1 : 0);
+                PCINC;
                 break;
-            case 0x23: // subu
-                OPER_U(rd, rs, rt, -);
+            }
+            case 0x2B: // sltu
+                S(rd, RU(rs) < RU(rt) ? 1 : 0);
+                PCINC;
                 break;
             case 0x24: // and
-                OPER_U(rd, rs, rt, &);
+                S(rd, R(rs) & R(rt));
+                PCINC;
                 break;
             case 0x25: // or
-                OPER_U(rd, rs, rt, |);
-                break;
-            case 0x26: // xor
-                OPER_U(rd, rs, rt, ^);
+                S(rd, R(rs) | R(rt));
+                PCINC;
                 break;
             case 0x27: // nor
-                S(rd, ~(RU(rs) | RU(rt)));
+                S(rd, ~(R(rs) | R(rt)));
+                PCINC;
+                break;
+            case 0x28: // xor
+                S(rd, R(rs) ^ R(rt));
+                PCINC;
+                break;
+            case 0x00: // sll
+                S(rd, R(rt) << sh);
+                PCINC;
+                break;
+            case 0x02: // srl
+                S(rd, RU(rt) >> sh);
+                PCINC;
+                break;
+            case 0x03: // sra
+                S(rd, R(rt) >> sh);
+                PCINC;
+                break;
+            case 0x08: // jr
+                S(PC, RU(rs));
+                break;
+            case 0x10: // mfhi
+                S(rd, R(HI));
+                PCINC;
+                break;
+            case 0x11: // mthi
+                S(HI, R(rs));
+                PCINC;
+                break;
+            case 0x12: // mflo
+                S(rd, R(LO));
+                PCINC;
+                break;
+            case 0x13: // mtlo
+                S(LO, R(rs));
+                PCINC;
                 break;
             case 0x0C:
                 syscall(cpu);
+                PCINC;
                 break;
             default: FATAL("Invalid FN type for 0x00 opcode: 0x%02x", fun)
         }
@@ -106,129 +302,51 @@ void cpu_exec_r(cpu_t *cpu, uint8_t op, uint8_t rs, uint8_t rt, uint8_t rd, uint
 
 }
 
-cpu_t* cpu_new() {
-    cpu_t *cpu = malloc(sizeof(cpu_t));
-    memset(cpu, 0, sizeof(cpu_t));
-    return cpu;
+
+#define CPU_MEM_GET(dtype, tname)                                           \
+dtype cpu_mem_get_##tname(cpu_t* cpu, uint32_t addr) {                      \
+    for (uint32_t pi = 0; pi < mmu_size(&cpu->mmu); pi++) {                 \
+        page_t* page = mmu_get(&cpu->mmu, pi);                              \
+        if (page->base == PAGE_ALIGN(addr)) {                               \
+            return page_mem_get_##tname(page, addr - page->base);           \
+        }                                                                   \
+    }                                                                       \
+    FATAL("Memory read: address 0x%08x not mapped.", addr);                       \
 }
 
-void cpu_next(cpu_t* cpu) {
-    uint32_t instr = MEM_GET(uint32_t, R(PC));
-    cpu_exec(cpu, instr);
-    S(PC, R(PC) + 4); // Increment PC
-}
-
-void cpu_exec(cpu_t *cpu, uint32_t instr) {
-    uint8_t op = (instr >> 26) & 0x3F;
-    uint8_t rs = (instr >> 21) & 0x1F;
-    uint8_t rt = (instr >> 16) & 0x1F;
-    int16_t imm = instr & 0xFFFF;
-
-#define IOPER(a, b, i, o) \
-    S(a, R(b) o i)
-#define IOPER_U(a, b, i, o) \
-    S(a, R(b) o (uint16_t) (i))
-#define BRANCH(cond, off)                \
-    if (cond) {                             \
-        S(PC, R(PC) + ((uint32_t) (off) << 2));   \
+CPU_MEM_GET(int8_t, byte)
+//CPU_MEM_GET(uint8_t, ubyte)
+uint8_t cpu_mem_get_ubyte(cpu_t *cpu, uint32_t addr) {
+    for (uint32_t pi = 0; pi < mmu_size(&cpu->mmu); pi++) {
+        page_t *page = mmu_get(&cpu->mmu, pi);
+        if (page->base == PAGE_ALIGN(addr)) {
+            return page_mem_get_ubyte(page, addr - page->base);
+        }
     }
-
-    switch (op) {
-        case 0x00:
-        case 0x10: {
-            uint8_t rd = (instr >> 11) & 0x1F;
-            uint8_t sh = (instr >> 6) & 0x1F;
-            uint8_t fn = (instr >> 0) & 0x3F;
-            cpu_exec_r(cpu, op, rs, rt, rd, sh, fn);
-            break;
-        }
-        case 0x02: {
-            uint32_t hi4 = R(PC) & 0xFC000000;
-            S(PC, hi4 | ((instr & 0x03FFFFF) << 2));
-            break;
-        }
-        case 0x03: {
-            S(RA, R(PC));
-            S(PC, ((instr & 0x03FFFFF) << 2));
-            break;
-        }
-        case 0x08: { // addi
-            IOPER(rt, rs, imm, +);
-            break;
-        }
-        case 0x09: { // addiu
-            IOPER_U(rt, rs, imm, +);
-            break;
-        }
-        case 0x0C: { // andi
-            IOPER_U(rt, rs, imm, &);
-            break;
-        }
-        case 0x0D: { // ori
-            IOPER(rt, rs, imm, |);
-        }
-        case 0x01: { // bgez - bgezal - bltz - bltzal
-            uint8_t link = rt & 0b10000;
-            uint8_t neg = rt & 0b00001;
-            if (link)
-                S(RA, R(PC));
-            if (neg) {
-                BRANCH(R(rs) < 0, imm)
-            } else {
-                BRANCH(R(rs) >= 0, imm)
-            }
-            break;
-        }
-        case 0x04: { // beq
-            BRANCH(R(rs) == R(rt), imm)
-        }
-        case 0x06: { // blez
-            BRANCH(R(rs) <= 0, imm)
-        }
-        case 0x05: { // bne
-            BRANCH(R(rs) != R(rt), imm)
-        }
-        case 0x07: { // bgtz
-            BRANCH(R(rs) > 0, imm)
-        }
-        case 0x20: { // lb
-            S(rt, MEM_GET(int8_t, imm + R(rs)));
-        }
-        case 0x24: { // lbu
-            S(rt, MEM_GET(uint8_t, imm + R(rs)));
-        }
-        case 0x21: { // lh
-            S(rt, MEM_GET(int16_t, imm + R(rs)));
-        }
-        case 0x25: { // lhu
-            S(rt, MEM_GET(uint16_t, imm + R(rs)));
-        }
-        case 0x23: { // lw
-            S(rt, MEM_GET(int32_t, imm + R(rs)));
-        }
-        case 0x28: { // sb
-            MEM_SET(int8_t, imm + R(rs), R(rt));
-        }
-        case 0x29: { // sh
-            MEM_SET(int16_t, imm + R(rs), R(rt));
-        }
-        case 0x2B: { // sw
-            MEM_SET(int32_t, imm + R(rs), R(rt));
-        }
-        case 0x0A: { // slti
-            IOPER(rt, rs, imm, <);
-        }
-        case 0x0B: { // sltiu
-            IOPER_U(rt, rs, imm, <);
-        }
-        default:
-            printf("Invalid opcode: 0x%02x\n", op);
-    }
-
-#undef IOPER
-#undef IOPER_U
-#undef BRANCH
-
+    FATAL("Memory read: address 0x%08x not mapped.", addr);
 }
+CPU_MEM_GET(int16_t, hword)
+CPU_MEM_GET(uint16_t, uhword)
+CPU_MEM_GET(int32_t, word)
+CPU_MEM_GET(uint32_t, uword)
+
+
+#define CPU_MEM_SET(dtype, tname)                                           \
+void cpu_mem_set_##tname(cpu_t* cpu, uint32_t addr, dtype value) {          \
+    for (uint32_t pi = 0; pi < mmu_size(&cpu->mmu); pi++) {                 \
+        page_t* page = mmu_get(&cpu->mmu, pi);                              \
+        if (page->base == PAGE_ALIGN(addr)) {                               \
+            page_mem_set_##tname(page, addr - page->base, value);           \
+        }                                                                   \
+    }                                                                       \
+    FATAL("Memory write: address 0x%08x not mapped.", addr);                \
+}
+
+CPU_MEM_SET(int8_t, byte)
+CPU_MEM_SET(uint8_t, ubyte)
+CPU_MEM_SET(int16_t, hword)
+CPU_MEM_SET(uint16_t, uhword)
+CPU_MEM_SET(int32_t, word)
+CPU_MEM_SET(uint32_t, uword)
 
 #pragma clang diagnostic pop

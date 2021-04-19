@@ -3,4 +3,4 @@ project(emu C)
 
 set(CMAKE_C_STANDARD 99)
 
-add_executable(emu src/main.c src/cpu.c src/cpu.h src/syscall.c src/syscall.h src/register.h)
+add_executable(emu src/main.c src/cpu.c src/cpu.h src/syscall.c src/syscall.h src/register.h src/memory.c src/memory.h src/program.h)
